@@ -1,24 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"go.etcd.io/etcd/clientv3"
 	"go.etcd.io/etcd/mvcc/mvccpb"
-	"sync"
 	"time"
 )
 
 // EvtType event type
 type EvtType int
 
-// EvtSrc event src
-type EvtSrc int
-
-// EvtKeyStr event key string
-type EvtKeyStr string
+// EvtKey event key string
+type EvtKey string
 
 // Evt event
 type Evt struct {
-	Src   EvtSrc
+	//Src   EvtSrc
 	Type  EvtType
 	Key   string
 	Value interface{}
@@ -50,13 +47,13 @@ const (
 
 // EtcdStore etcd store impl
 type EtcdStore struct {
-	sync.RWMutex
+	//sync.RWMutex
 
-	prefix       string
-	keyStoreDirs map[string]string
+	prefix  string
+	keysMap map[string]struct{}
 
 	evtCh              chan *Evt
-	watchMethodMapping map[EvtKeyStr]func(EvtType, *mvccpb.KeyValue) *Evt
+	watchMethodMapping map[EvtKey]func(EvtType, *mvccpb.KeyValue) *Evt
 
 	rawClient *clientv3.Client
 }
@@ -66,11 +63,21 @@ type EtcdStore struct {
 // 2、公共函数需要添加注释
 
 // NewEtcdStore create a etcd store
-func NewEtcdStore(etcdAddrs []string, prefix string, basicAuth BasicAuth, watchHandle map[EvtKeyStr]func(EvtType, *mvccpb.KeyValue) *Evt) (*EtcdStore, error) {
+// /127.0.0.1/file.json  prefix : /127.0.0.1/ , key : file.json
+func NewEtcdStore(etcdAddrs []string,
+	prefix string,
+	basicAuth BasicAuth,
+	watchHandle map[EvtKey]func(EvtType, *mvccpb.KeyValue) *Evt) (*EtcdStore, error) {
 
 	store := &EtcdStore{
-		prefix:             prefix,
-		watchMethodMapping: watchHandle,
+		prefix:  prefix,
+		keysMap: make(map[string]struct{}),
+		watchMethodMapping: func() map[EvtKey]func(EvtType, *mvccpb.KeyValue) *Evt {
+			if watchHandle == nil {
+				return make(map[EvtKey]func(EvtType, *mvccpb.KeyValue) *Evt)
+			}
+			return watchHandle
+		}(),
 	}
 
 	config := &clientv3.Config{
@@ -84,8 +91,20 @@ func NewEtcdStore(etcdAddrs []string, prefix string, basicAuth BasicAuth, watchH
 		config.Password = basicAuth.password
 	}
 
-	cli, err := clientv3.New(*config)
+	if len(store.watchMethodMapping) == 0 {
+		// no key input, default use prefix as key
+		store.keysMap[prefix] = struct{}{}
+		store.watchMethodMapping[EvtKey(prefix)] = defaultDataHandle
+	} else {
+		for key, watchMeth := range store.watchMethodMapping {
+			store.keysMap[prefix] = struct{}{}
+			if watchMeth == nil {
+				store.watchMethodMapping[key] = defaultDataHandle
+			}
+		}
+	}
 
+	cli, err := clientv3.New(*config)
 	if err != nil {
 		return nil, err
 	}
@@ -95,8 +114,17 @@ func NewEtcdStore(etcdAddrs []string, prefix string, basicAuth BasicAuth, watchH
 	return store, nil
 }
 
+func defaultDataHandle(evtType EvtType, kv *mvccpb.KeyValue) *Evt {
+
+	return &Evt{
+		Type:  evtType,
+		Key:   string(kv.Key),
+		Value: kv.Value,
+	}
+}
+
 // Watch watch event from etcd
-func (e *EtcdStore) Watch(evtCh chan *Evt, stopCh chan bool) error {
+func (e *EtcdStore) Watch(evtCh chan *Evt) error {
 	e.evtCh = evtCh
 
 	e.doWatch()
@@ -113,6 +141,7 @@ func (e *EtcdStore) doWatch() {
 		rch := watcher.Watch(ctx, e.prefix, clientv3.WithPrefix())
 		for wresp := range rch {
 			if wresp.Canceled {
+				fmt.Println("Canceled...")
 				return
 			}
 
@@ -131,7 +160,12 @@ func (e *EtcdStore) doWatch() {
 					}
 				}
 
-				e.evtCh <- e.watchMethodMapping[EvtKeyStr(ev.Kv.Key)](evtType, ev.Kv)
+				_, ok := e.watchMethodMapping[EvtKey(ev.Kv.Key)]
+				if !ok {
+					continue
+				}
+
+				e.evtCh <- e.watchMethodMapping[EvtKey(ev.Kv.Key)](evtType, ev.Kv)
 			}
 		}
 	}
