@@ -18,17 +18,18 @@ func main() {
 	)
 
 	watchHandle[EvtKey(keyPrefix)] = doWatchTest
+	//watchHandle[EvtKey(keyPrefix)] = nil  使用默认的数据处理函数
 	etcdStore, err := NewEtcdStore(etcdAddr, keyPrefix, BasicAuth{}, watchHandle)
 	if err != nil {
 		fmt.Println("error :", err)
 		return
 	}
 
-	fmt.Println("start...")
-
+	// 用于接收etcd检测key的数据返回channel
 	evtCh := make(chan *Evt)
 	go etcdStore.Watch(evtCh)
 
+	// 接收数据，更新数据
 	go readyToReceiveWatchEvent(evtCh)
 
 	select {}

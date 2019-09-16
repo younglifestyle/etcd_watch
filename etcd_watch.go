@@ -39,10 +39,6 @@ const (
 const (
 	// DefaultTimeout default timeout
 	DefaultTimeout = time.Second * 3
-	// DefaultRequestTimeout default request timeout
-	DefaultRequestTimeout = 10 * time.Second
-	// DefaultSlowRequestTime default slow request time
-	DefaultSlowRequestTime = time.Second * 1
 )
 
 // EtcdStore etcd store impl
